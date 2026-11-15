@@ -73,7 +73,7 @@ def get_engine():
     eng = create_engine(url, pool_recycle=240)
     # migration : colonnes de verrou et d'indicateur "à discuter" (ignorées si déjà présentes)
     for col, typ in (("verrou_par", "TEXT"), ("verrou_date", "TEXT"),
-                     ("a_discuter", "INTEGER DEFAULT 0")):
+                     ("a_discuter", "INTEGER DEFAULT 0"), ("auteur_corrige", "TEXT")):
         try:
             with eng.begin() as c:
                 c.execute(text(f"ALTER TABLE tribunes ADD COLUMN {col} {typ}"))
@@ -293,10 +293,6 @@ else:
 # ------------------------------------------------------------------ MAIN
 st.caption(f"{caption}  ·  {row['date']}")
 st.title(row["titre"])
-st.markdown(f"**Auteur·ice(s)** : {row['auteur']}")
-st.write(row["description"])
-st.markdown(f"[🔗 Ouvrir l'article]({row['url']})")
-
 if row["valide"]:
     st.info(f"Déjà validée par **{row['annotateur']}** le {row['date_validation']}. "
             "Tu peux la modifier et revalider.")
@@ -306,9 +302,18 @@ elif mode != "À valider":
         st.warning(f"⚠️ **{lock}** est en train de travailler sur cette tribune.")
 if pd.notna(row["a_discuter"]) and row["a_discuter"] == 1:
     st.warning("🚩 Marquée « à discuter ».")
-st.divider()
 
 with st.form(key=f"form_{i}"):
+    auteur_orig = row["auteur"] if isinstance(row["auteur"], str) else ""
+    corr = row.get("auteur_corrige")
+    corr = corr if isinstance(corr, str) and corr else ""
+    auteur_new = st.text_input("Auteur·ice(s) — modifiable en cas d'erreur",
+                               value=corr or auteur_orig, key=f"auteur_{i}")
+    if corr:
+        st.caption(f"Texte d'origine : {auteur_orig}")
+    st.write(row["description"])
+    st.markdown(f"[🔗 Ouvrir l'article]({row['url']})")
+    st.divider()
     answers = {}
     cols = st.columns(2)
     for k, (f, (label, opts)) in enumerate(FIELDS.items()):
@@ -347,11 +352,13 @@ if ok or flag or skip or prev:
         sets = ", ".join(f"humain_{f} = :{f}" for f in FIELDS)
         answers = {f: (SEP.join(a) if a else None) if isinstance(a, list) else a
                    for f, a in answers.items()}
+        ac = auteur_new.strip()
+        ac = ac if ac and ac != auteur_orig.strip() else None   # None = pas de correction
         execute(
-            f"UPDATE tribunes SET {sets}, a_discuter = :disc, valide = 1, annotateur = :me, "
+            f"UPDATE tribunes SET {sets}, a_discuter = :disc, auteur_corrige = :ac, valide = 1, annotateur = :me, "
             "date_validation = :d, commentaire = :c, verrou_par = NULL, verrou_date = NULL "
             "WHERE id = :i",
-            me=me, d=now_s(), c=comment, i=int(i), disc=int(flag), **answers,
+            me=me, d=now_s(), c=comment, i=int(i), disc=int(flag), ac=ac, **answers,
         )
         get_stats.clear()
     if mode == "À valider":
