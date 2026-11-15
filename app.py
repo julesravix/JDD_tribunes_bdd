@@ -315,12 +315,11 @@ with st.form(key=f"form_{i}"):
         ia = row[f"ia_{f}"]
         with cols[k % 2]:
             if f in MULTI:
-                answers[f] = st.multiselect(
-                    label + " (plusieurs choix possibles)", opts,
-                    default=clean_multi(row[f"humain_{f}"], opts),
-                    key=f"{f}_{i}",
-                    placeholder="Choisir une ou plusieurs options",
-                )
+                st.markdown(f"{label}  \n<small>plusieurs choix possibles</small>",
+                            unsafe_allow_html=True)
+                current = clean_multi(row[f"humain_{f}"], opts)
+                answers[f] = [o for o in opts
+                              if st.checkbox(o, value=(o in current), key=f"{f}_{o}_{i}")]
             else:
                 current = clean(row[f"humain_{f}"], opts)
                 answers[f] = st.radio(
