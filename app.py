@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
 # ------------------------------------------------------------------ CONFIG
-USERS = ["Annotateur 1", "Annotateur 2"]   # <- mets vos prénoms
+USERS = ["Lou", "Jules"]   # <- mets vos prénoms
 LOCK_MIN = 10                              # durée du verrou (minutes)
 
 OUI_NON = ["oui", "non"]
@@ -31,6 +31,9 @@ TYPES_AUTEUR = [
     "autre",
 ]
 BORDS = ["extrême droite", "droite", "centre / majorité présidentielle", "gauche", "non applicable"]
+
+MULTI = {"type_auteur"}     # champs à réponses multiples (plusieurs casquettes)
+SEP = " | "                 # séparateur dans la base : "élu·e / politique | essayiste / ..."
 
 FIELDS = {
     "collectif": ("Tribune collective (signée par plus d'une personne) ?", OUI_NON),
@@ -170,6 +173,13 @@ def clean(v, options):
     return v if isinstance(v, str) and v in options else None
 
 
+def clean_multi(v, options):
+    """'a | b' -> ['a', 'b'] (ne garde que les options valides ; accepte une ancienne valeur simple)."""
+    if not isinstance(v, str):
+        return []
+    return [x.strip() for x in v.split(SEP.strip()) if x.strip() in options]
+
+
 # ------------------------------------------------------------------ SAUVEGARDE AUTO
 # Envoie un CSV complet dans un dépôt GitHub privé à la connexion d'une personne,
 # au plus une fois par heure (tous utilisateurs confondus). Inactif sans secrets.
@@ -302,15 +312,23 @@ with st.form(key=f"form_{i}"):
     answers = {}
     cols = st.columns(2)
     for k, (f, (label, opts)) in enumerate(FIELDS.items()):
-        current = clean(row[f"humain_{f}"], opts)
         ia = row[f"ia_{f}"]
         with cols[k % 2]:
-            answers[f] = st.radio(
-                label, opts,
-                index=opts.index(current) if current else None,
-                horizontal=(opts == OUI_NON),
-                key=f"{f}_{i}",
-            )
+            if f in MULTI:
+                answers[f] = st.multiselect(
+                    label + " (plusieurs choix possibles)", opts,
+                    default=clean_multi(row[f"humain_{f}"], opts),
+                    key=f"{f}_{i}",
+                    placeholder="Choisir une ou plusieurs options",
+                )
+            else:
+                current = clean(row[f"humain_{f}"], opts)
+                answers[f] = st.radio(
+                    label, opts,
+                    index=opts.index(current) if current else None,
+                    horizontal=(opts == OUI_NON),
+                    key=f"{f}_{i}",
+                )
             st.caption(f"🤖 IA : {ia if isinstance(ia, str) else '— (non renseigné)'}")
     comment = st.text_input("Commentaire (optionnel)",
                             value=row["commentaire"] if isinstance(row["commentaire"], str) else "")
@@ -324,10 +342,12 @@ with st.form(key=f"form_{i}"):
 if ok or flag or skip or prev:
     if ok or flag:
         # "Valider" exige tous les champs ; "À discuter" accepte un remplissage partiel
-        if ok and any(a is None for a in answers.values()):
+        if ok and any(a is None or a == [] for a in answers.values()):
             st.error("Il reste des champs non remplis (ou clique sur « À discuter »).")
             st.stop()
         sets = ", ".join(f"humain_{f} = :{f}" for f in FIELDS)
+        answers = {f: (SEP.join(a) if a else None) if isinstance(a, list) else a
+                   for f, a in answers.items()}
         execute(
             f"UPDATE tribunes SET {sets}, a_discuter = :disc, valide = 1, annotateur = :me, "
             "date_validation = :d, commentaire = :c, verrou_par = NULL, verrou_date = NULL "
