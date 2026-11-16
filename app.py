@@ -10,11 +10,12 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import DBAPIError
 
 # ------------------------------------------------------------------ CONFIG
-USERS = ["Lou", "Jules"]   # <- mets vos prénoms
+USERS = ["Lou", "Jules"]
+DEBUT_PAR_LA_FIN = {"Jules"}   # ces personnes reçoivent les tribunes en partant de la dernière
 LOCK_MIN = 10                              # durée du verrou (minutes)
 
 OUI_NON = ["oui", "non"]
@@ -70,15 +71,17 @@ def get_engine():
         url = st.secrets["DATABASE_URL"]
     except Exception:
         url = "sqlite:///tribunes.db"
-    eng = create_engine(url, pool_recycle=240)
-    # migration : colonnes de verrou et d'indicateur "à discuter" (ignorées si déjà présentes)
+    eng = create_engine(url, pool_recycle=240, pool_size=3, max_overflow=2)
+    # migration : ajoute seulement les colonnes manquantes (évite un ALTER TABLE, qui verrouille la table)
+    existing = {c["name"] for c in inspect(eng).get_columns("tribunes")}
     for col, typ in (("verrou_par", "TEXT"), ("verrou_date", "TEXT"),
                      ("a_discuter", "INTEGER DEFAULT 0"), ("auteur_corrige", "TEXT")):
-        try:
-            with eng.begin() as c:
-                c.execute(text(f"ALTER TABLE tribunes ADD COLUMN {col} {typ}"))
-        except Exception:
-            pass
+        if col not in existing:
+            try:
+                with eng.begin() as c:
+                    c.execute(text(f"ALTER TABLE tribunes ADD COLUMN {col} {typ}"))
+            except Exception:
+                pass
     return eng
 
 
@@ -155,7 +158,8 @@ def claim_row(i, me):
 
 
 def claim_next(me, skipped):
-    cand = q(f"SELECT id FROM tribunes WHERE valide = 0 AND {FREE} ORDER BY id "
+    sens = "DESC" if me in DEBUT_PAR_LA_FIN else "ASC"
+    cand = q(f"SELECT id FROM tribunes WHERE valide = 0 AND {FREE} ORDER BY id {sens} "
              f"LIMIT {30 + len(skipped)}", me=me, cut=cutoff_s())["id"].tolist()
     for i in cand:
         if i not in skipped:
